@@ -10,21 +10,33 @@ import (
 
 // Element defines single XML element.
 type Element struct {
-	XMLName         xml.Name `xml:"http://www.w3.org/2001/XMLSchema element"`
-	Name            string   `xml:"name,attr"`
-	nameOverride    string
-	XmlNameOverride string      `xml:"-"`
-	FieldOverride   bool        `xml:"-"`
-	Type            reference   `xml:"type,attr"`
-	Ref             reference   `xml:"ref,attr"`
-	MinOccurs       string      `xml:"minOccurs,attr"`
-	MaxOccurs       string      `xml:"maxOccurs,attr"`
-	Annotation      *Annotation `xml:"annotation"`
-	refElm          *Element
-	ComplexType     *ComplexType `xml:"complexType"`
-	SimpleType      *SimpleType  `xml:"simpleType"`
-	schema          *Schema
-	typ             Type
+	XMLName           xml.Name `xml:"http://www.w3.org/2001/XMLSchema element"`
+	Name              string   `xml:"name,attr"`
+	nameOverride      string
+	XmlNameOverride   string      `xml:"-"`
+	FieldOverride     bool        `xml:"-"`
+	Type              reference   `xml:"type,attr"`
+	Ref               reference   `xml:"ref,attr"`
+	SubstitutionGroup reference   `xml:"substitutionGroup,attr"`
+	MinOccurs         string      `xml:"minOccurs,attr"`
+	MaxOccurs         string      `xml:"maxOccurs,attr"`
+	Annotation        *Annotation `xml:"annotation"`
+	refElm            *Element
+	ComplexType       *ComplexType `xml:"complexType"`
+	SimpleType        *SimpleType  `xml:"simpleType"`
+	schema            *Schema
+	typ               Type
+}
+
+func (e *Element) Schema() *Schema {
+	return e.schema
+}
+
+func (e *Element) IsEmpty() bool {
+	if e.Ref != "" && e.refElm != nil {
+		return e.refElm.IsEmpty()
+	}
+	return e.typ.IsEmpty()
 }
 
 func (e *Element) Attributes() []Attribute {
@@ -87,16 +99,21 @@ func (e *Element) GoTypeName() string {
 	if e.Type != "" {
 		return e.typ.GoName()
 	} else if e.Ref != "" {
-		return e.refElm.GoTypeName()
+		return e.refElm.GoName()
 	} else if e.isPlainString() {
 		return "string"
 	}
 	return e.GoName()
 }
 
-func (e *Element) GoForeignModule() string {
+func (e *Element) GoForeignModule(parent interface{}) string {
 	if e.isPlainString() && e.refElm == nil && e.typ == nil {
 		return ""
+	}
+
+	var parentSchema *Schema
+	if sch, ok := parent.(schemaProvider); ok {
+		parentSchema = sch.Schema()
 	}
 
 	foreignSchema := (*Schema)(nil)
@@ -106,8 +123,8 @@ func (e *Element) GoForeignModule() string {
 		foreignSchema = e.typ.Schema()
 	}
 
-	if foreignSchema != nil && foreignSchema != e.schema &&
-		foreignSchema.TargetNamespace != e.schema.TargetNamespace {
+	if parentSchema != nil && foreignSchema != nil &&
+		foreignSchema.TargetNamespace != parentSchema.TargetNamespace {
 		return foreignSchema.GoPackageName() + "."
 	}
 	return ""

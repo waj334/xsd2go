@@ -13,6 +13,7 @@ type Type interface {
 	Attributes() []Attribute
 	Elements() []Element
 	ContainsText() bool
+	IsEmpty() bool
 	compile(*Schema, *Element)
 }
 
@@ -47,17 +48,35 @@ type ComplexType struct {
 	Sequence         *Sequence    `xml:"sequence"`
 	SequenceAll      *SequenceAll `xml:"all"`
 	schema           *Schema
-	SimpleContent    *SimpleContent  `xml:"simpleContent"`
-	ComplexContent   *ComplexContent `xml:"complexContent"`
-	Choice           *Choice         `xml:"choice"`
+	SimpleContent    *SimpleContent   `xml:"simpleContent"`
+	ComplexContent   *ComplexContent  `xml:"complexContent"`
+	Choice           *Choice          `xml:"choice"`
+	AttributeGroup   []AttributeGroup `xml:"attributeGroup"`
 	content          GenericContent
+}
+
+func (ct *ComplexType) IsEmpty() bool {
+	return len(ct.Attributes()) == 0 && len(ct.Elements()) == 0
 }
 
 func (ct *ComplexType) Attributes() []Attribute {
 	if ct.content != nil {
 		return ct.content.Attributes()
 	}
+
+	if ct.schema != nil && ct.AttributeGroup != nil {
+		var result []Attribute
+		for _, group := range ct.AttributeGroup {
+			result = append(result, group.Attributes()...)
+		}
+		return result
+	}
+
 	return ct.AttributesDirect
+}
+
+func (ct *ComplexType) AttributeGroups() []AttributeGroup {
+	return ct.AttributeGroup
 }
 
 func (ct *ComplexType) HasXmlNameAttribute() bool {
@@ -128,6 +147,11 @@ func (ct *ComplexType) compile(sch *Schema, parentElement *Element) {
 		ct.SequenceAll.compile(sch, parentElement)
 	}
 
+	for idx := range ct.AttributeGroups() {
+		attributeGroup := &ct.AttributeGroups()[idx]
+		attributeGroup.compile(sch, parentElement)
+	}
+
 	// Handle improbable name clash. Consider XSD defining two attributes on the element:
 	// "id" and "Id", this would create name clash given the camelization we do.
 	goNames := map[string]uint{}
@@ -185,6 +209,10 @@ type SimpleType struct {
 	Annotation  *Annotation  `xml:"annotation"`
 	Restriction *Restriction `xml:"restriction"`
 	schema      *Schema
+}
+
+func (st *SimpleType) IsEmpty() bool {
+	return false
 }
 
 func (st *SimpleType) GoName() string {
@@ -247,6 +275,10 @@ func (*SimpleType) ContainsText() bool {
 
 type staticType string
 
+func (st staticType) IsEmpty() bool {
+	return false
+}
+
 func (st staticType) GoName() string {
 	return string(st)
 }
@@ -285,6 +317,7 @@ var staticTypes = map[string]staticType{
 	"token":              "string",
 	"Name":               "string",
 	"NCName":             "string",
+	"NMTOKEN":            "string",
 	"NMTOKENS":           "string",
 	"anySimpleType":      "string",
 	"anyType":            "string",
@@ -301,6 +334,7 @@ var staticTypes = map[string]staticType{
 	"boolean":            "bool",
 	"ID":                 "string",
 	"IDREF":              "string",
+	"IDREFS":             "string",
 	"positiveInteger":    "uint64",
 	"unsignedInt":        "uint64",
 	"gYear":              "string",

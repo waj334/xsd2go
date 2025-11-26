@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -14,22 +15,29 @@ import (
 
 // Schema is the root XSD element.
 type Schema struct {
-	XMLName               xml.Name         `xml:"http://www.w3.org/2001/XMLSchema schema"`
-	Xmlns                 Xmlns            `xml:"-"`
-	TargetNamespace       string           `xml:"targetNamespace,attr"`
-	Annotation            *Annotation      `xml:"annotation"`
-	Includes              []Include        `xml:"include"`
-	Imports               []Import         `xml:"import"`
-	Elements              []Element        `xml:"element"`
-	Attributes            []Attribute      `xml:"attribute"`
-	AttributeGroups       []AttributeGroup `xml:"attributeGroup"`
-	ComplexTypes          []ComplexType    `xml:"complexType"`
-	SimpleTypes           []SimpleType     `xml:"simpleType"`
+	XMLName               xml.Name          `xml:"http://www.w3.org/2001/XMLSchema schema"`
+	Xmlns                 Xmlns             `xml:"-"`
+	TargetNamespace       string            `xml:"targetNamespace,attr"`
+	Annotation            *Annotation       `xml:"annotation"`
+	Includes              []*Include        `xml:"include"`
+	Imports               []*Import         `xml:"import"`
+	Elements              []*Element        `xml:"element"`
+	Attributes            []*Attribute      `xml:"attribute"`
+	AttributeGroups       []*AttributeGroup `xml:"attributeGroup"`
+	ComplexTypes          []*ComplexType    `xml:"complexType"`
+	SimpleTypes           []*SimpleType     `xml:"simpleType"`
 	importedModules       map[string]*Schema
 	ModulesPath           string `xml:"-"`
 	filePath              string
-	inlinedElements       []Element
+	inlinedElements       []*Element
 	goPackageNameOverride string
+	typeOverrides         typeOverrides
+	substitutionGroup     map[reference][]*Element
+}
+
+// schemaProvider is a helper interface detecting types that can provide a schema.
+type schemaProvider interface {
+	Schema() *Schema
 }
 
 func ReadSchemaFromFile(xsdPath string) (*Schema, error) {
@@ -54,7 +62,10 @@ func ReadSchemaFromFile(xsdPath string) (*Schema, error) {
 }
 
 func parseSchema(f io.Reader) (*Schema, error) {
-	schema := Schema{importedModules: map[string]*Schema{}}
+	schema := Schema{
+		importedModules:   map[string]*Schema{},
+		substitutionGroup: map[reference][]*Element{},
+	}
 	d := xml.NewDecoder(f)
 	d.CharsetReader = charset.NewReaderLabel
 
@@ -79,20 +90,37 @@ func (sch *Schema) compile() {
 		sch.TargetNamespace = sch.GoPackageName()
 	}
 
+	for _, el := range sch.Elements {
+		if len(el.SubstitutionGroup) > 0 {
+			elements := sch.substitutionGroup[el.SubstitutionGroup]
+			elements = append(elements, el)
+			sch.substitutionGroup[el.SubstitutionGroup] = elements
+		}
+	}
+
 	for idx := range sch.Elements {
-		el := &sch.Elements[idx]
+		el := sch.Elements[idx]
 		el.compile(sch, nil)
 	}
+
+	// Sort lists.
+	for k, v := range sch.substitutionGroup {
+		slices.SortFunc(v, func(a, b *Element) int {
+			return strings.Compare(a.GoName(), b.GoName())
+		})
+		sch.substitutionGroup[k] = v
+	}
+
 	for idx := range sch.AttributeGroups {
-		att := &sch.AttributeGroups[idx]
+		att := sch.AttributeGroups[idx]
 		att.compile(sch, nil)
 	}
 	for idx := range sch.ComplexTypes {
-		ct := &sch.ComplexTypes[idx]
+		ct := sch.ComplexTypes[idx]
 		ct.compile(sch, nil)
 	}
 	for idx := range sch.SimpleTypes {
-		st := &sch.SimpleTypes[idx]
+		st := sch.SimpleTypes[idx]
 		st.compile(sch, nil)
 	}
 }
@@ -103,6 +131,14 @@ func (sch *Schema) findReferencedAttribute(ref reference) *Attribute {
 		panic("Internal error: referenced attribute '" + ref + "' cannot be found.")
 	}
 	return innerSchema.GetAttribute(ref.Name())
+}
+
+func (sch *Schema) findReferencedAttributeGroup(ref reference) *AttributeGroup {
+	innerSchema := sch.findReferencedSchemaByPrefix(ref.NsPrefix())
+	if innerSchema == nil {
+		panic("Internal error: referenced attribute '" + ref + "' cannot be found.")
+	}
+	return innerSchema.GetAttributeGroup(ref.Name())
 }
 
 func (sch *Schema) findReferencedElement(ref reference) *Element {
@@ -120,6 +156,9 @@ func (sch *Schema) findReferencedType(ref reference) Type {
 	innerSchema := sch.findReferencedSchemaByPrefix(ref.NsPrefix())
 	if innerSchema == nil {
 		xmlnsUri := sch.Xmlns.UriByPrefix(ref.NsPrefix())
+		if typeName, overridden := sch.typeOverrides.overrideType(xmlnsUri, ref.Name()); overridden {
+			return staticType(typeName)
+		}
 		if xmlnsUri == "http://www.w3.org/2001/XMLSchema" { //nolint:revive
 			return StaticType(ref.Name())
 		}
@@ -127,6 +166,9 @@ func (sch *Schema) findReferencedType(ref reference) Type {
 	}
 	if innerSchema != sch {
 		sch.registerImportedModule(innerSchema)
+	}
+	if typeName, overridden := sch.typeOverrides.overrideType(innerSchema.TargetNamespace, ref.Name()); overridden {
+		return staticType(typeName)
 	}
 	return innerSchema.GetType(ref.Name())
 }
@@ -189,7 +231,7 @@ func (sch *Schema) encodingXmlImportNeeded() bool {
 	return len(sch.Elements) != 0 || len(sch.ComplexTypes) != 0
 }
 
-func deduplicateElementsLossfree(elements []Element) []Element {
+func deduplicateElementsLossfree(elements []*Element) []*Element {
 	seen := make(map[string]int, len(elements))
 	for j, element := range elements {
 		dupeCount, dupe := seen[element.GoName()]
@@ -203,33 +245,42 @@ func deduplicateElementsLossfree(elements []Element) []Element {
 	return elements
 }
 
-func (sch *Schema) ExportableElements() []Element {
-	return deduplicateElementsLossfree(append(sch.Elements, sch.inlinedElements...))
+func (sch *Schema) ExportableElements() []*Element {
+	result := deduplicateElementsLossfree(append(sch.Elements, sch.inlinedElements...))
+	slices.SortFunc(result, func(e *Element, e2 *Element) int {
+		return strings.Compare(e.GoName(), e2.GoName())
+	})
+	return result
 }
 
-func (sch *Schema) ExportableComplexTypes() []ComplexType {
+func (sch *Schema) ExportableComplexTypes() []*ComplexType {
 	elCache := map[string]bool{}
 	for _, el := range sch.Elements {
 		elCache[el.GoName()] = true
 	}
 
-	var res []ComplexType
+	var res []*ComplexType
 	for _, typ := range sch.ComplexTypes {
 		_, found := elCache[typ.GoName()]
 		if !found {
 			res = append(res, typ)
 		}
 	}
+
+	slices.SortFunc(res, func(e *ComplexType, e2 *ComplexType) int {
+		return strings.Compare(e.GoName(), e2.GoName())
+	})
+
 	return res
 }
 
-func (sch *Schema) ExportableSimpleTypes() []SimpleType {
+func (sch *Schema) ExportableSimpleTypes() []*SimpleType {
 	elCache := map[string]bool{}
 	for _, el := range sch.Elements {
 		elCache[el.GoName()] = true
 	}
 
-	var res []SimpleType
+	var res []*SimpleType
 	for _, typ := range sch.SimpleTypes {
 		_, found := elCache[typ.GoName()]
 		if !found {
@@ -242,7 +293,16 @@ func (sch *Schema) ExportableSimpleTypes() []SimpleType {
 func (sch *Schema) GetAttribute(name string) *Attribute {
 	for idx, attr := range sch.Attributes {
 		if attr.Name == name {
-			return &sch.Attributes[idx]
+			return sch.Attributes[idx]
+		}
+	}
+	return nil
+}
+
+func (sch *Schema) GetAttributeGroup(name string) *AttributeGroup {
+	for idx, attr := range sch.AttributeGroups {
+		if attr.Name == name {
+			return sch.AttributeGroups[idx]
 		}
 	}
 	return nil
@@ -251,7 +311,7 @@ func (sch *Schema) GetAttribute(name string) *Attribute {
 func (sch *Schema) GetElement(name string) *Element {
 	for idx, elm := range sch.Elements {
 		if elm.Name == name {
-			return &sch.Elements[idx]
+			return sch.Elements[idx]
 		}
 	}
 	return nil
@@ -260,17 +320,17 @@ func (sch *Schema) GetElement(name string) *Element {
 func (sch *Schema) GetType(name string) Type {
 	for idx, typ := range sch.ComplexTypes {
 		if typ.Name == name {
-			return &sch.ComplexTypes[idx]
+			return sch.ComplexTypes[idx]
 		}
 	}
 	for idx, typ := range sch.SimpleTypes {
 		if typ.Name == name {
-			return &sch.SimpleTypes[idx]
+			return sch.SimpleTypes[idx]
 		}
 	}
 	for idx, typ := range sch.AttributeGroups {
 		if typ.Name == name {
-			return &sch.AttributeGroups[idx]
+			return sch.AttributeGroups[idx]
 		}
 	}
 	if IsStaticType(name) {
@@ -320,6 +380,19 @@ func (sch *Schema) registerImportedModule(module *Schema) {
 	sch.importedModules[module.GoPackageName()] = module
 }
 
+func (sch *Schema) merge(other *Schema) {
+	sch.Imports = append(other.Imports, sch.Imports...)
+	sch.Elements = append(other.Elements, sch.Elements...)
+	sch.Attributes = append(other.Attributes, sch.Attributes...)
+	sch.AttributeGroups = append(other.AttributeGroups, sch.AttributeGroups...)
+	sch.ComplexTypes = append(other.ComplexTypes, sch.ComplexTypes...)
+	sch.SimpleTypes = append(other.SimpleTypes, sch.SimpleTypes...)
+	sch.inlinedElements = append(other.inlinedElements, sch.inlinedElements...)
+	for key, sch := range other.importedModules {
+		sch.importedModules[key] = sch
+	}
+}
+
 // Some elements are not defined at the top-level, rather these are inlined in the complexType definitions.
 func (sch *Schema) registerInlinedElement(el *Element, parentElement *Element) {
 	if sch.isElementInlined(el) {
@@ -327,15 +400,17 @@ func (sch *Schema) registerInlinedElement(el *Element, parentElement *Element) {
 			panic("Not implemented: found inlined xsd:element without @name attribute")
 		}
 		el.prefixNameWithParent(parentElement)
-		sch.inlinedElements = append(sch.inlinedElements, *el)
+
+		cloned := *el
+		sch.inlinedElements = append(sch.inlinedElements, &cloned)
 	}
 }
 
 func (sch *Schema) isElementInlined(el *Element) bool {
 	found := false
 	for idx := range sch.Elements {
-		e := &sch.Elements[idx]
-		if e == el {
+		e := sch.Elements[idx]
+		if *e == *el {
 			found = true
 			break
 		}
@@ -352,7 +427,8 @@ type Import struct {
 
 func (i *Import) load(ws *Workspace, baseDir string) (err error) {
 	if i.SchemaLocation != "" {
-		i.ImportedSchema, err = ws.loadXsd(filepath.Join(baseDir, i.SchemaLocation), false)
+		fname := filepath.ToSlash(filepath.Join(baseDir, i.SchemaLocation))
+		i.ImportedSchema, err = ws.loadXsd(fname, false)
 	}
 	return
 }
@@ -366,7 +442,8 @@ type Include struct {
 
 func (i *Include) load(ws *Workspace, baseDir string) (err error) {
 	if i.SchemaLocation != "" {
-		i.IncludedSchema, err = ws.loadXsd(filepath.Join(baseDir, i.SchemaLocation), true)
+		fname := filepath.ToSlash(filepath.Join(baseDir, i.SchemaLocation))
+		i.IncludedSchema, err = ws.loadXsd(fname, true)
 	}
 	return
 }
