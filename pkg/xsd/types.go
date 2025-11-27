@@ -47,9 +47,10 @@ type ComplexType struct {
 	Sequence         *Sequence    `xml:"sequence"`
 	SequenceAll      *SequenceAll `xml:"all"`
 	schema           *Schema
-	SimpleContent    *SimpleContent  `xml:"simpleContent"`
-	ComplexContent   *ComplexContent `xml:"complexContent"`
-	Choice           *Choice         `xml:"choice"`
+	SimpleContent    *SimpleContent   `xml:"simpleContent"`
+	ComplexContent   *ComplexContent  `xml:"complexContent"`
+	Choice           *Choice          `xml:"choice"`
+	AttributeGroup   []AttributeGroup `xml:"attributeGroup"`
 	content          GenericContent
 }
 
@@ -57,7 +58,20 @@ func (ct *ComplexType) Attributes() []Attribute {
 	if ct.content != nil {
 		return ct.content.Attributes()
 	}
+
+	if ct.schema != nil && ct.AttributeGroup != nil {
+		var result []Attribute
+		for _, group := range ct.AttributeGroup {
+			result = append(result, group.Attributes()...)
+		}
+		return result
+	}
+
 	return ct.AttributesDirect
+}
+
+func (ct *ComplexType) AttributeGroups() []AttributeGroup {
+	return ct.AttributeGroup
 }
 
 func (ct *ComplexType) HasXmlNameAttribute() bool {
@@ -126,6 +140,11 @@ func (ct *ComplexType) compile(sch *Schema, parentElement *Element) {
 			panic("Not implemented: xsd:complexType " + ct.Name + " defines xsd:sequence and xsd:all")
 		}
 		ct.SequenceAll.compile(sch, parentElement)
+	}
+
+	for idx := range ct.AttributeGroups() {
+		attributeGroup := &ct.AttributeGroups()[idx]
+		attributeGroup.compile(sch, parentElement)
 	}
 
 	// Handle improbable name clash. Consider XSD defining two attributes on the element:

@@ -32,6 +32,9 @@ func (e *Element) Schema() *Schema {
 }
 
 func (e *Element) IsEmpty() bool {
+	if e.Ref != "" && e.refElm != nil {
+		return e.refElm.IsEmpty()
+	}
 	return len(e.Attributes()) == 0 && len(e.Elements()) == 0
 }
 
@@ -95,7 +98,7 @@ func (e *Element) GoTypeName() string {
 	if e.Type != "" {
 		return e.typ.GoName()
 	} else if e.Ref != "" {
-		return e.refElm.GoTypeName()
+		return e.refElm.GoName()
 	} else if e.isPlainString() {
 		return "string"
 	}

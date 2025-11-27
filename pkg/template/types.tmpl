@@ -19,7 +19,10 @@ import (
 	{{- else }}
 	// Element
 	{{- end }}
-	type {{ .GoName }} = {{.GoForeignModule $parent}}{{ .GoTypeName }}
+	type {{ .GoName }} struct {
+    XMLName xml.Name `xml:"{{.Name}}{{.Modifiers}}"`
+    {{.GoForeignModule $parent}}{{ .GoTypeName }}
+  }
   {{- end }}
 {{ end }}
 
@@ -31,14 +34,13 @@ import (
   {{- end}}
   type {{ .GoName }} struct {
   {{- if not .HasXmlNameAttribute }}
-    XMLName xml.Name
   {{- end}}
   {{ range .Attributes }}
       {{- if .ContainsDocumentation }}
       // {{ .GoName }}: {{ .Documentation }}
       {{- end}}
       {{ .GoName }} {{.GoForeignModule $parent}}{{.GoType}} `xml:"{{.XmlName}},{{.Modifiers}}"`
-  {{end }}
+  {{- end }}
 
   {{ range .Elements }}
       {{- if not .IsEmpty }}
@@ -47,7 +49,7 @@ import (
       {{- end}}
       {{ .GoFieldName}} {{.GoMemLayout}}{{.GoForeignModule $parent}}{{ .GoTypeName }} `xml:"{{.XmlName}}{{.Modifiers}}"`
       {{- end }}
-  {{end}}
+  {{- end }}
 
   {{- if .ContainsText }}
     Text string `xml:",chardata"`
@@ -56,18 +58,15 @@ import (
     InnerXml string `xml:",innerxml"`
   {{- end}}
   }
-{{end}}
+{{ end }}
 
 // XSD SimpleType declarations
-{{range .ExportableSimpleTypes }}
+{{ range $simpleType := .ExportableSimpleTypes }}
   {{- if .ContainsDocumentation }}
   // {{ .GoName }}: {{ .Documentation }}
-  {{- end}}
-  type {{ .GoName }} {{ .GoTypeName }}
-
-  {{ $simpleType := . }}
+  {{- end }}
+  type {{ .GoName }} {{ .GoTypeName -}}
   {{ range .Enums }}
   const {{ $simpleType.GoName -}} {{- .GoName }} {{ $simpleType.GoName }} = "{{ .XmlName }}"
-  {{end }}
-
-{{end}}
+  {{- end }}
+{{- end }}

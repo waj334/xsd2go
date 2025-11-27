@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -109,6 +110,14 @@ func (sch *Schema) findReferencedAttribute(ref reference) *Attribute {
 		panic("Internal error: referenced attribute '" + ref + "' cannot be found.")
 	}
 	return innerSchema.GetAttribute(ref.Name())
+}
+
+func (sch *Schema) findReferencedAttributeGroup(ref reference) *AttributeGroup {
+	innerSchema := sch.findReferencedSchemaByPrefix(ref.NsPrefix())
+	if innerSchema == nil {
+		panic("Internal error: referenced attribute '" + ref + "' cannot be found.")
+	}
+	return innerSchema.GetAttributeGroup(ref.Name())
 }
 
 func (sch *Schema) findReferencedElement(ref reference) *Element {
@@ -216,7 +225,11 @@ func deduplicateElementsLossfree(elements []*Element) []*Element {
 }
 
 func (sch *Schema) ExportableElements() []*Element {
-	return deduplicateElementsLossfree(append(sch.Elements, sch.inlinedElements...))
+	result := deduplicateElementsLossfree(append(sch.Elements, sch.inlinedElements...))
+	slices.SortFunc(result, func(e *Element, e2 *Element) int {
+		return strings.Compare(e.GoName(), e2.GoName())
+	})
+	return result
 }
 
 func (sch *Schema) ExportableComplexTypes() []*ComplexType {
@@ -232,6 +245,11 @@ func (sch *Schema) ExportableComplexTypes() []*ComplexType {
 			res = append(res, typ)
 		}
 	}
+
+	slices.SortFunc(res, func(e *ComplexType, e2 *ComplexType) int {
+		return strings.Compare(e.GoName(), e2.GoName())
+	})
+
 	return res
 }
 
@@ -255,6 +273,15 @@ func (sch *Schema) GetAttribute(name string) *Attribute {
 	for idx, attr := range sch.Attributes {
 		if attr.Name == name {
 			return sch.Attributes[idx]
+		}
+	}
+	return nil
+}
+
+func (sch *Schema) GetAttributeGroup(name string) *AttributeGroup {
+	for idx, attr := range sch.AttributeGroups {
+		if attr.Name == name {
+			return sch.AttributeGroups[idx]
 		}
 	}
 	return nil
