@@ -2,6 +2,8 @@ package xsd
 
 import (
 	"encoding/xml"
+	"slices"
+	"strings"
 )
 
 type Choice struct {
@@ -16,6 +18,8 @@ type Choice struct {
 
 func (c *Choice) compile(sch *Schema, parentElement *Element) {
 	c.schema = sch
+	c.allElements = []Element{}
+
 	for idx := range c.ElementList {
 		el := &c.ElementList[idx]
 
@@ -29,7 +33,31 @@ func (c *Choice) compile(sch *Schema, parentElement *Element) {
 		}
 	}
 
-	c.allElements = c.ElementList
+	c.allElements = append(c.allElements, c.ElementList...)
+
+	for i := 0; i < len(c.allElements); i++ {
+		el := c.allElements[i]
+		elements, ok := sch.substitutionGroup[el.Ref]
+		if ok {
+			for _, subst := range elements {
+				if _, imported := subst.schema.importedModules[el.Ref.NsPrefix()]; imported {
+					// Prevent creating a circular dependency.
+					continue
+				}
+
+				prefix := subst.schema.Xmlns.PrefixByUri(subst.schema.TargetNamespace)
+				ref := reference(prefix + ":" + subst.Name)
+				substEl := Element{
+					Ref:       ref,
+					MinOccurs: el.MinOccurs,
+					MaxOccurs: el.MaxOccurs,
+				}
+				substEl.compile(sch, parentElement)
+				c.allElements = append(c.allElements, substEl)
+			}
+		}
+	}
+
 	inheritedElements := []Element{}
 	for idx := range c.Sequences {
 		el := &c.Sequences[idx]
@@ -45,7 +73,11 @@ func (c *Choice) compile(sch *Schema, parentElement *Element) {
 		}
 	}
 	// deduplicate elements that represent duplicate within xsd:choice/xsd:sequence structure
-	c.allElements = append(c.ElementList, deduplicateElements(inheritedElements)...)
+	c.allElements = append(c.allElements, deduplicateElements(inheritedElements)...)
+	c.allElements = deduplicateElements(c.allElements)
+	slices.SortFunc(c.allElements, func(a, b Element) int {
+		return strings.Compare(a.GoName(), b.GoName())
+	})
 }
 
 func (c *Choice) Elements() []Element {

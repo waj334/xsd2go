@@ -32,6 +32,7 @@ type Schema struct {
 	inlinedElements       []*Element
 	goPackageNameOverride string
 	typeOverrides         typeOverrides
+	substitutionGroup     map[reference][]*Element
 }
 
 // schemaProvider is a helper interface detecting types that can provide a schema.
@@ -61,7 +62,10 @@ func ReadSchemaFromFile(xsdPath string) (*Schema, error) {
 }
 
 func parseSchema(f io.Reader) (*Schema, error) {
-	schema := Schema{importedModules: map[string]*Schema{}}
+	schema := Schema{
+		importedModules:   map[string]*Schema{},
+		substitutionGroup: map[reference][]*Element{},
+	}
 	d := xml.NewDecoder(f)
 	d.CharsetReader = charset.NewReaderLabel
 
@@ -86,10 +90,27 @@ func (sch *Schema) compile() {
 		sch.TargetNamespace = sch.GoPackageName()
 	}
 
+	for _, el := range sch.Elements {
+		if len(el.SubstitutionGroup) > 0 {
+			elements := sch.substitutionGroup[el.SubstitutionGroup]
+			elements = append(elements, el)
+			sch.substitutionGroup[el.SubstitutionGroup] = elements
+		}
+	}
+
 	for idx := range sch.Elements {
 		el := sch.Elements[idx]
 		el.compile(sch, nil)
 	}
+
+	// Sort lists.
+	for k, v := range sch.substitutionGroup {
+		slices.SortFunc(v, func(a, b *Element) int {
+			return strings.Compare(a.GoName(), b.GoName())
+		})
+		sch.substitutionGroup[k] = v
+	}
+
 	for idx := range sch.AttributeGroups {
 		att := sch.AttributeGroups[idx]
 		att.compile(sch, nil)

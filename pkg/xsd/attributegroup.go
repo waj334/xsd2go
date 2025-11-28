@@ -15,6 +15,10 @@ type AttributeGroup struct {
 	schema           *Schema
 }
 
+func (att *AttributeGroup) IsEmpty() bool {
+	return false
+}
+
 func (att *AttributeGroup) Attributes() []Attribute {
 	attrs := att.AttributesDirect
 	if att.typ != nil {

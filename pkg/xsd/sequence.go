@@ -2,6 +2,8 @@ package xsd
 
 import (
 	"encoding/xml"
+	"slices"
+	"strings"
 )
 
 type Sequence struct {
@@ -16,11 +18,36 @@ func (s *Sequence) Elements() []Element {
 }
 
 func (s *Sequence) compile(sch *Schema, parentElement *Element) {
+	s.allElements = []Element{}
+
 	for idx := range s.ElementList {
 		el := &s.ElementList[idx]
 		el.compile(sch, parentElement)
 	}
 	s.allElements = s.ElementList
+
+	for i := 0; i < len(s.allElements); i++ {
+		el := s.allElements[i]
+		elements, ok := sch.substitutionGroup[el.Ref]
+		if ok {
+			for _, subst := range elements {
+				if _, imported := subst.schema.importedModules[el.Ref.NsPrefix()]; imported {
+					// Prevent creating a circular dependency.
+					continue
+				}
+
+				prefix := subst.schema.Xmlns.PrefixByUri(subst.schema.TargetNamespace)
+				ref := reference(prefix + ":" + subst.Name)
+				substEl := Element{
+					Ref:       ref,
+					MinOccurs: el.MinOccurs,
+					MaxOccurs: el.MaxOccurs,
+				}
+				substEl.compile(sch, parentElement)
+				s.allElements = append(s.allElements, substEl)
+			}
+		}
+	}
 
 	for idx := range s.Choices {
 		c := &s.Choices[idx]
@@ -28,6 +55,11 @@ func (s *Sequence) compile(sch *Schema, parentElement *Element) {
 
 		s.allElements = append(s.allElements, c.Elements()...)
 	}
+
+	s.allElements = deduplicateElements(s.allElements)
+	slices.SortFunc(s.allElements, func(a, b Element) int {
+		return strings.Compare(a.GoName(), b.GoName())
+	})
 }
 
 type SequenceAll struct {
@@ -42,11 +74,33 @@ func (s *SequenceAll) Elements() []Element {
 }
 
 func (s *SequenceAll) compile(sch *Schema, parentElement *Element) {
+	s.allElements = []Element{}
+
 	for idx := range s.ElementList {
 		el := &s.ElementList[idx]
 		el.compile(sch, parentElement)
+
+		elements, ok := sch.substitutionGroup[el.Ref]
+		if ok {
+			for _, subst := range elements {
+				if _, imported := subst.schema.importedModules[el.Ref.NsPrefix()]; imported {
+					// Prevent creating a circular dependency.
+					continue
+				}
+
+				prefix := subst.schema.Xmlns.PrefixByUri(subst.schema.TargetNamespace)
+				ref := reference(prefix + ":" + subst.Name)
+				substEl := Element{
+					Ref:       ref,
+					MinOccurs: el.MinOccurs,
+					MaxOccurs: el.MaxOccurs,
+				}
+				substEl.compile(sch, parentElement)
+				s.allElements = append(s.allElements, substEl)
+			}
+		}
 	}
-	s.allElements = s.ElementList
+	s.allElements = append(s.allElements, s.ElementList...)
 
 	for idx := range s.Choices {
 		c := &s.Choices[idx]
@@ -54,4 +108,9 @@ func (s *SequenceAll) compile(sch *Schema, parentElement *Element) {
 
 		s.allElements = append(s.allElements, c.Elements()...)
 	}
+
+	s.allElements = deduplicateElements(s.allElements)
+	slices.SortFunc(s.allElements, func(a, b Element) int {
+		return strings.Compare(a.GoName(), b.GoName())
+	})
 }

@@ -13,6 +13,7 @@ type Type interface {
 	Attributes() []Attribute
 	Elements() []Element
 	ContainsText() bool
+	IsEmpty() bool
 	compile(*Schema, *Element)
 }
 
@@ -52,6 +53,10 @@ type ComplexType struct {
 	Choice           *Choice          `xml:"choice"`
 	AttributeGroup   []AttributeGroup `xml:"attributeGroup"`
 	content          GenericContent
+}
+
+func (ct *ComplexType) IsEmpty() bool {
+	return len(ct.Attributes()) == 0 && len(ct.Elements()) == 0
 }
 
 func (ct *ComplexType) Attributes() []Attribute {
@@ -206,6 +211,10 @@ type SimpleType struct {
 	schema      *Schema
 }
 
+func (st *SimpleType) IsEmpty() bool {
+	return false
+}
+
 func (st *SimpleType) GoName() string {
 	return strcase.ToCamel(st.Name)
 }
@@ -265,6 +274,10 @@ func (*SimpleType) ContainsText() bool {
 }
 
 type staticType string
+
+func (st staticType) IsEmpty() bool {
+	return false
+}
 
 func (st staticType) GoName() string {
 	return string(st)

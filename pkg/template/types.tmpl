@@ -3,14 +3,14 @@
 package {{ .GoPackageName }}
 
 import (
-    {{- range .GoImportsNeeded}}
+    {{- range .GoImportsNeeded }}
         "{{ . }}"
     {{- end }}
 )
 
 {{- if .ContainsDocumentation }}
 // {{ .Documentation }}
-{{- end}}
+{{- end }}
 
 {{ range $parent := .ExportableElements }}
   {{- if not .IsEmpty }}
@@ -20,26 +20,23 @@ import (
 	// Element
 	{{- end }}
 	type {{ .GoName }} struct {
-    XMLName xml.Name `xml:"{{.Name}}{{.Modifiers}}"`
-    {{.GoForeignModule $parent}}{{ .GoTypeName }}
+    XMLName xml.Name `xml:"{{ .Name }}{{ .Modifiers }}"`
+    {{ .GoForeignModule $parent }}{{ .GoTypeName }}
   }
   {{- end }}
 {{ end }}
 
 // XSD ComplexType declarations
-{{range $parent := .ExportableComplexTypes }}
-
+{{ range $parent := .ExportableComplexTypes }}
   {{- if .ContainsDocumentation }}
   // {{ .GoName }}: {{ .Documentation }}
   {{- end}}
   type {{ .GoName }} struct {
-  {{- if not .HasXmlNameAttribute }}
-  {{- end}}
   {{ range .Attributes }}
       {{- if .ContainsDocumentation }}
-      // {{ .GoName }}: {{ .Documentation }}
+      // Attr{{ .GoName }}: {{ .Documentation }}
       {{- end}}
-      {{ .GoName }} {{.GoForeignModule $parent}}{{.GoType}} `xml:"{{.XmlName}},{{.Modifiers}}"`
+      Attr{{ .GoName }} {{ .GoForeignModule $parent }}{{ .GoType }} `xml:"{{ .XmlName }},{{ .Modifiers }}"`
   {{- end }}
 
   {{ range .Elements }}
@@ -47,7 +44,7 @@ import (
       {{- if .ContainsDocumentation }}
       // {{ .GoName }}: {{ .Documentation }}
       {{- end}}
-      {{ .GoFieldName}} {{.GoMemLayout}}{{.GoForeignModule $parent}}{{ .GoTypeName }} `xml:"{{.XmlName}}{{.Modifiers}}"`
+      {{ .GoFieldName }} {{ .GoMemLayout }}{{ .GoForeignModule $parent }}{{ .GoTypeName }} `xml:"{{ .XmlName }}{{ .Modifiers }}"`
       {{- end }}
   {{- end }}
 
@@ -56,7 +53,7 @@ import (
   {{- end}}
   {{- if .ContainsInnerXml }}
     InnerXml string `xml:",innerxml"`
-  {{- end}}
+  {{- end }}
   }
 {{ end }}
 
